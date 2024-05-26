@@ -5,7 +5,6 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="a1b5e8d2-e8fb-47d5-83c1-399cd662e0fb" name="Changes" comment="">
-      <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/main.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
@@ -112,7 +111,7 @@
       <workItem from="1716669217365" duration="1110000" />
       <workItem from="1716724919453" duration="3311000" />
       <workItem from="1716729421051" duration="945000" />
-      <workItem from="1716730426918" duration="12488000" />
+      <workItem from="1716730426918" duration="12555000" />
     </task>
     <servers />
   </component>
@@ -136,11 +135,6 @@
           <url>file://$PROJECT_DIR$/.venv/lib/python3.10/site-packages/podman/domain/containers.py</url>
           <line>518</line>
           <option name="timeStamp" value="21" />
-        </line-breakpoint>
-        <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
-          <url>file://$PROJECT_DIR$/main.py</url>
-          <line>118</line>
-          <option name="timeStamp" value="22" />
         </line-breakpoint>
         <line-breakpoint enabled="true" suspend="THREAD" type="python-line">
           <url>file://$PROJECT_DIR$/main.py</url>
