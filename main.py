@@ -225,7 +225,7 @@ async def update_self():
 
 @app.get("/version")
 async def get_version():
-    return "v2"
+    return "v3"
 
 #
 #
