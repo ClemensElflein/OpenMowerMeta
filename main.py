@@ -68,8 +68,7 @@ class MetaContainerManager(ContainerManagerBase):
         # Fetch image repo and tag from the container handle and pull
         image_repo, tag = self._container_handle.attrs["Image"].split(":")
         self.pull_image(image_repo, tag)
-        self._container_handle.restart()
-        self._container_handle.update()
+        self._container_handle.stop()
         return True
 
 
@@ -226,7 +225,7 @@ async def update_self():
 
 @app.get("/version")
 async def get_version():
-    return "v4"
+    return "v5"
 
 #
 #
