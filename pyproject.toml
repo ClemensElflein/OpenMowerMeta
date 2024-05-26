@@ -1,0 +1,18 @@
+[tool.poetry]
+name = "open-mower-meta"
+version = "0.1.0"
+description = ""
+authors = ["Clemens Elflein <post@x-tech.online>"]
+license = "MIT"
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.10"
+fastapi = "^0.111.0"
+podman = "^5.0.0"
+uvicorn = "^0.29.0"
+
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
