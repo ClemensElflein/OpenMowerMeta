@@ -5,14 +5,7 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="a1b5e8d2-e8fb-47d5-83c1-399cd662e0fb" name="Changes" comment="">
-      <change afterPath="$PROJECT_DIR$/.idea/OpenMowerBackend.iml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/inspectionProfiles/profiles_settings.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/misc.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/modules.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/vcs.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/main.py" afterDir="false" />
-      <change afterPath="$PROJECT_DIR$/test_main.http" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.github/workflows/build_image.yaml" beforeDir="false" afterPath="$PROJECT_DIR$/.github/workflows/build_image.yaml" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -45,7 +38,7 @@
     "FastAPI.OpenMowerBackend.executor": "Run",
     "Python.main.executor": "Run",
     "RunOnceActivity.ShowReadmeOnStart": "true",
-    "git-widget-placeholder": "master",
+    "git-widget-placeholder": "main",
     "node.js.detected.package.eslint": "true",
     "node.js.detected.package.tslint": "true",
     "node.js.selected.package.eslint": "(autodetect)",
@@ -118,7 +111,7 @@
       <workItem from="1716669217365" duration="1110000" />
       <workItem from="1716724919453" duration="3311000" />
       <workItem from="1716729421051" duration="945000" />
-      <workItem from="1716730426918" duration="11162000" />
+      <workItem from="1716730426918" duration="11253000" />
     </task>
     <servers />
   </component>
