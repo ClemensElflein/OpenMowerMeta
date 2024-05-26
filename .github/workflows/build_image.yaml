@@ -2,7 +2,7 @@ name: Build Image
 on: [push]
 
 jobs:
-  build-backend:
+  build-image:
     runs-on: ubuntu-latest
     steps:
       # https://github.com/docker/setup-buildx-action
@@ -24,7 +24,6 @@ jobs:
         id: build-and-push
         uses: docker/build-push-action@v5
         with:
-          context: .
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           push: true
