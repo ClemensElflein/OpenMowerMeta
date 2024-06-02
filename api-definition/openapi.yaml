@@ -1,0 +1,39 @@
+openapi: "3.0.0"
+info:
+  version: 1.0.0
+  title: OpenMower Device API
+  description: REST API to manage the OpenMower
+servers:
+  - url: http://localhost:8080/v1
+paths:
+  /open-mower-container/action/{action}:
+    post:
+      tags:
+        - OpenMowerContainer
+      operationId: executeAction
+      summary: Start or stop the container
+      parameters:
+        - name: action
+          in: path
+          required: true
+          schema:
+            type: string
+            enum: [start, stop]
+      responses:
+        200:
+          description: Successfully executed the requested operation.
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/SuccessResponse"
+components:
+  schemas:
+    SuccessResponse:
+      type: object
+      required:
+        - message
+      properties:
+        message:
+          type: string
+          nullable: false
+
