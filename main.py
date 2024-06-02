@@ -1,10 +1,13 @@
 import asyncio
+import json
 import logging
 import sys
 import threading
 import time
 from contextlib import asynccontextmanager
 
+from aioreactive import AsyncAnonymousObserver
+from aioreactive.subscription import subscribe_async
 from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 from podman import PodmanClient
@@ -44,6 +47,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 @app.post("/update-self")
 async def update_self():
     meta_manager.update()
@@ -52,7 +56,7 @@ async def update_self():
 
 @app.get("/container/status")
 async def get_container_status():
-    return mower_container_manager.status()
+    return mower_container_manager.state_observable.value
 
 
 @app.post("/container/action")
@@ -65,6 +69,33 @@ def post_container_action(action: str):
     elif action == "pull":
         mower_container_manager.update()
     return mower_container_manager.status()
+
+
+@app.websocket("/ws/container/status")
+async def websocket_endpoint(websocket: WebSocket):
+    print("new status connection")
+    await websocket.accept()
+    await websocket.send_json({"yo": True})
+    mower_container_manager.state_observable.subscribe()
+    subscription = subscribe_async(mower_container_manager.state_observable)
+
+    disposable = await subscribe_async(mower_container_manager.state_observable, AsyncAnonymousObserver(lambda value: websocket.send_json(value)))
+    # version_subscription = mower_container_manager.version_observable.subscribe(lambda value: websocket.send_text({"image_version":value}))
+    try:
+        while True:
+            # need to send something in order to check if the websocket is still alive
+            # see: https://github.com/tiangolo/fastapi/discussions/9031
+            try:
+                await asyncio.wait_for(
+                    websocket.receive(), 1.0
+                )
+            except asyncio.TimeoutError:
+                pass
+    except Exception as e:
+        print("websocket exception", e)
+        pass
+    state_subscription.dispose()
+    # version_subscription.dispose()
 
 
 @app.websocket("/ws/container/logs")
@@ -130,4 +161,3 @@ async def websocket_endpoint(websocket: WebSocket):
         # Wait for the podman stream to finish
         await loop
         logger.debug("WS stream done")
-

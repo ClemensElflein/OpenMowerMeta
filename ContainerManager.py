@@ -4,6 +4,18 @@ from typing import Dict, List
 from podman import PodmanClient
 
 from ContainerManagerBase import ContainerManagerBase
+from reactivex.subject import BehaviorSubject
+from pydantic import BaseModel
+from enum import Enum
+
+
+class ContainerExecutionState(str, Enum):
+    unknown = 'unknown'
+    stopped = 'stopped'
+    starting = 'starting'
+    running = 'running'
+    stopping = 'stopping'
+    error = 'error'
 
 
 class ContainerManager(ContainerManagerBase):
@@ -30,6 +42,7 @@ class ContainerManager(ContainerManagerBase):
         status: Get the status of the managed container.
 
     """
+
     def __init__(self, podman_client: PodmanClient, managed_container_name: str, repository: str, tag: str,
                  command: List[str], props: Dict, logger: logging.Logger):
         super().__init__(podman_client, managed_container_name, logger)
@@ -37,6 +50,8 @@ class ContainerManager(ContainerManagerBase):
         self.tag = tag
         self.command = command
         self.props = props
+        self.state_observable = BehaviorSubject(ContainerExecutionState.unknown)
+        self.version_observable = BehaviorSubject("unknown")
 
     def stop_container(self):
         """
@@ -45,15 +60,17 @@ class ContainerManager(ContainerManagerBase):
         :return: None
         """
         if self._container_handle is None:
+            self.state_observable.on_next(ContainerExecutionState(ContainerExecutionState.stopped))
             return
+        self.state_observable.on_next(ContainerExecutionState(ContainerExecutionState.stopping))
         self.logger.info(f"Stopping and removing container.")
         self._container_handle.stop(ignore=True)
         self.wait(["stopped", "exited", "configured"])
-
         self.logger.info(f"Container {self.managed_container_name} stopped.")
         self._container_handle.remove()
         self.logger.info(f"Container {self.managed_container_name} removed.")
         self._container_handle = None
+        self.state_observable.on_next(ContainerExecutionState(ContainerExecutionState.stopped))
 
     def get_image_id(self) -> str | None:
         """
@@ -90,9 +107,11 @@ class ContainerManager(ContainerManagerBase):
         :return: True if the container is successfully created and started, False otherwise.
         """
         self.stop_container()
+        self.state_observable.on_next(ContainerExecutionState(ContainerExecutionState.starting))
         image_id = self.get_image_id()
         if image_id is None:
             self.logger.error("Error getting image.")
+            self.state_observable.on_next(ContainerExecutionState(ContainerExecutionState.error))
             return False
         self._container_handle = self._podman_client.containers.create(image=image_id, command=self.command,
                                                                        name=self.managed_container_name, **self.props)
@@ -101,23 +120,12 @@ class ContainerManager(ContainerManagerBase):
         self.wait(["running", "exited"])
         if self._container_handle.status == "running":
             self.logger.info("Container Started.")
+            self.state_observable.on_next(ContainerExecutionState(ContainerExecutionState.running))
             return True
         else:
+            self.state_observable.on_next(ContainerExecutionState(ContainerExecutionState.error))
             self.logger.error("Error starting container.")
             for line in self.get_logs():
                 self.logger.error(line)
             self.stop_container()
             return False
-
-    def status(self) -> str:
-        """
-        Returns the status of the container.
-
-        :return: The status of the container. Possible values are:
-                 - "no-container" if we don't have a handle to a container at all
-                 - the status of the container
-        """
-        if self._container_handle is None:
-            return "no-container"
-        self._container_handle.reload()
-        return self._container_handle.status

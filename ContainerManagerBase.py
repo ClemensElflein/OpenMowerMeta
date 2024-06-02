@@ -1,7 +1,10 @@
 import logging
 import json
+from typing import Optional
+
 import podman.domain.containers
 from podman import PodmanClient
+
 
 
 class ContainerManagerBase:
@@ -22,6 +25,7 @@ class ContainerManagerBase:
         _container_handle (podman.domain.containers.Container | None): The handle to the managed container, if it exists.
 
     """
+
     def __init__(self, podman_client: PodmanClient, managed_container_name: str, logger: logging.Logger):
         self.logger = logger
         self.logger = logging.getLogger(self.__class__.__name__)
@@ -33,6 +37,7 @@ class ContainerManagerBase:
             self._container_handle = container
             self.logger.info(f"Found container: {container.name}")
             break
+
 
     def pull_image(self, repository, tag) -> str | None:
         """
