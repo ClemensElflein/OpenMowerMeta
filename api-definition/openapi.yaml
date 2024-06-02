@@ -36,4 +36,3 @@ components:
         message:
           type: string
           nullable: false
-

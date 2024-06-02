@@ -1,9 +1,9 @@
 package de.openmower.backend.endpoints
 
-import de.openmower.backend.logic.ContainerState
-import de.openmower.backend.logic.OpenMowerContainerManager
 import de.openmower.backend.SuccessResponseDTO
 import de.openmower.backend.api.OpenMowerContainerApiService
+import de.openmower.backend.logic.ContainerState
+import de.openmower.backend.logic.OpenMowerContainerManager
 import org.springframework.messaging.simp.SimpMessagingTemplate
 import org.springframework.messaging.simp.annotation.SubscribeMapping
 import org.springframework.scheduling.annotation.Scheduled
@@ -22,11 +22,10 @@ class OpenMowerContainerApiServiceImpl(private val containerManager: OpenMowerCo
     }
 }
 
-
 @Controller
 class ContainerWebSocketController(
     private val containerManager: OpenMowerContainerManager,
-    private val template: SimpMessagingTemplate
+    private val template: SimpMessagingTemplate,
 ) {
     init {
         // Subscribe to state changes and publish to WebSocket
