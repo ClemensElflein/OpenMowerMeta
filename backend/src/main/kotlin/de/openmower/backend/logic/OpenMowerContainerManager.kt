@@ -1,14 +1,21 @@
 package de.openmower.backend.logic
 
+import com.github.dockerjava.api.async.ResultCallback
+import com.github.dockerjava.api.model.Frame
 import com.github.dockerjava.api.model.Volume
 import com.github.dockerjava.core.DefaultDockerClientConfig
 import com.github.dockerjava.core.DockerClientImpl
 import com.github.dockerjava.okhttp.OkDockerHttpClient
+import io.reactivex.rxjava3.core.Observable
 import io.reactivex.rxjava3.subjects.BehaviorSubject
+import io.reactivex.rxjava3.subjects.ReplaySubject
 import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
 import org.slf4j.LoggerFactory
 import org.springframework.beans.factory.annotation.Value
+import org.springframework.scheduling.annotation.Scheduled
 import org.springframework.stereotype.Service
+import java.io.Closeable
+import java.time.Instant
 
 enum class ExecutionState(val id: String) {
     // Additional state, if we don't know the state (yet)
@@ -41,6 +48,12 @@ class OpenMowerContainerManager(
     @Value("\${de.openmower.backend.containerName}") private val containerName: String,
     @Value("\${de.openmower.backend.imageRegistry}") private val imageRegistry: String,
 ) {
+    /**
+     * Observable state of this container manager.
+     */
+    final val stateObservable: BehaviorSubject<ContainerState> = BehaviorSubject.create()
+    final val logSubject: ReplaySubject<Pair<Instant, String>> = ReplaySubject.createWithSize(500)
+
     private val logger = LoggerFactory.getLogger(this::class.java)
     private val dockerClientConfig =
         DefaultDockerClientConfig.createDefaultConfigBuilder()
@@ -58,18 +71,25 @@ class OpenMowerContainerManager(
      */
     private var containerId: String? = null
 
-    final val stateObservable: BehaviorSubject<ContainerState> = BehaviorSubject.create()
+    // Callback for the current log stream from docker.
+    private var logCallback: ResultCallback<Frame>? = null
+
+    // True, if there are websockets connected and we're generally interested in logs
+    private var logStreamingEnabled = false
 
     init {
         findContainerHandle()
-        fetchConfiguration()
-        stateObservable.subscribe { value ->
-            logger.info("New State: $value")
-        }
     }
 
     private fun updateContainerStateManual(executionState: ExecutionState) {
-        stateObservable.onNext(stateObservable.value?.copy(executionState = executionState) ?: ContainerState(executionState, "unknown"))
+        synchronized(stateObservable) {
+            stateObservable.onNext(
+                stateObservable.value?.copy(executionState = executionState) ?: ContainerState(
+                    executionState,
+                    "unknown",
+                ),
+            )
+        }
     }
 
     private fun findContainerHandle() {
@@ -100,7 +120,9 @@ class OpenMowerContainerManager(
             val id = containerId
             if (id == null) {
                 val newState = ContainerState(ExecutionState.EXITED, "unknown")
-                stateObservable.onNext(newState)
+                synchronized(stateObservable) {
+                    stateObservable.onNext(newState)
+                }
                 return newState
             }
             try {
@@ -112,12 +134,16 @@ class OpenMowerContainerManager(
                         ExecutionState.fromValue(containerInfo.state.status ?: "error"),
                         imageVersion ?: "unknown",
                     )
-                stateObservable.onNext(newState)
+                synchronized(stateObservable) {
+                    stateObservable.onNext(newState)
+                }
                 return newState
             } catch (e: Exception) {
                 logger.error("Error updating container state", e)
                 val newState = ContainerState(ExecutionState.ERROR, "unknown")
-                stateObservable.onNext(newState)
+                synchronized(stateObservable) {
+                    stateObservable.onNext(newState)
+                }
                 return newState
             }
         }
@@ -198,5 +224,118 @@ class OpenMowerContainerManager(
         println(str)
         tarStream.close()
         istr.close()
+    }
+
+    fun startLogStream() {
+        synchronized(this) {
+            val containerId = containerId ?: return
+            if (logCallback != null) {
+                // Stream is active, don't do anything
+                return
+            }
+
+            // no log stream, start it
+
+            // Find a last log, if we've streamed before. This way we continue where we left off
+            val lastLog = if (logSubject.hasValue()) logSubject.value else null
+
+            // Either use lastLog or the last 10 minutes of logs
+            val since = lastLog?.first ?: Instant.now().minusSeconds(600L)
+
+            logCallback =
+                dockerClient.logContainerCmd(containerId)
+                    .withFollowStream(true)
+                    .withStdOut(true)
+                    .withStdErr(true)
+                    .withTimestamps(true)
+                    .withSince((since.toEpochMilli() / 1000).toInt())
+                    .exec(
+                        object : ResultCallback<Frame> {
+                            private var closeable: Closeable? = null
+                            private var lastTime: Instant? = null
+
+                            override fun close() {
+                                // Close the actual connection and remove the callback from the Manager.
+                                // This way, the reconnect knows that we're not streaming anymore.
+                                closeable?.close()
+                                closeable = null
+                                synchronized(this@OpenMowerContainerManager) {
+                                    logCallback = null
+                                }
+                            }
+
+                            override fun onStart(closeable: Closeable?) {
+                                // Store a reference to the closeable, so that we can close it, if needed.
+                                this.closeable = closeable
+
+                                // Check, that the time is newer than the last log in order to avoid duplicates
+                                // we can't adjust the "since" parameter, because it only has second accuracy
+                                lastTime = if (logSubject.hasValue()) logSubject.value?.first else null
+                            }
+
+                            override fun onNext(frame: Frame) {
+                                // We have requested timestamps, so parse them.
+                                val split = frame.payload.toString(Charsets.UTF_8).split(' ', ignoreCase = false, limit = 2)
+                                if (split.size != 2) {
+                                    // If not a success, just use "now"
+                                    synchronized(logSubject) {
+                                        logSubject.onNext(Instant.now() to split[0])
+                                    }
+                                } else {
+                                    val time =
+                                        try {
+                                            Instant.parse(split[0])
+                                        } catch (e: Exception) {
+                                            Instant.now()
+                                        }
+
+                                    // accept the log, if we don't have a lastTime, or if the log is newer.
+                                    if (lastTime == null || time.isAfter(lastTime)) {
+                                        synchronized(logSubject) {
+                                            logSubject.onNext(time to split[1])
+                                        }
+                                    }
+                                }
+                            }
+
+                            override fun onError(throwable: Throwable) {
+                                // Close connection onError
+                                close()
+                            }
+
+                            override fun onComplete() {
+                                // Close connection onComplete
+                                close()
+                            }
+                        },
+                    )
+            // Allow reconnect.
+            logStreamingEnabled = true
+        }
+    }
+
+    @Scheduled(fixedRate = 10000)
+    private fun refreshContainerStateAndReconnectLogs() {
+        synchronized(this) {
+            updateContainerState()
+            // Only reconnect, if logging should be enable, the logger is dead and the container is running
+            if (logStreamingEnabled && logCallback == null && stateObservable.value?.executionState == ExecutionState.RUNNING) {
+                logger.info("reconnecting log stream")
+                // We should be streaming logs, but we don't, reconnect logs
+                startLogStream()
+            }
+        }
+    }
+
+    fun stopLogStream() {
+        synchronized(this) {
+            logStreamingEnabled = false
+            logCallback?.close()
+        }
+    }
+
+    fun streamLogs(): Observable<String> {
+        startLogStream()
+        return logSubject.map { (_, str) -> str }
     }
 }
