@@ -11,9 +11,7 @@ import io.reactivex.rxjava3.subjects.BehaviorSubject
 import io.reactivex.rxjava3.subjects.ReplaySubject
 import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
 import org.slf4j.LoggerFactory
-import org.springframework.beans.factory.annotation.Value
 import org.springframework.scheduling.annotation.Scheduled
-import org.springframework.stereotype.Service
 import java.io.Closeable
 import java.time.Instant
 
@@ -42,11 +40,10 @@ enum class ExecutionState(val id: String) {
 
 data class ContainerState(val executionState: ExecutionState, val imageVersion: String)
 
-@Service
-class OpenMowerContainerManager(
-    @Value("\${de.openmower.backend.dockerSocketUrl}") private val dockerSocketUrl: String,
-    @Value("\${de.openmower.backend.containerName}") private val containerName: String,
-    @Value("\${de.openmower.backend.imageRegistry}") private val imageRegistry: String,
+class ContainerManager(
+    private val dockerSocketUrl: String,
+    private val containerName: String,
+    private val imageRegistry: String,
 ) {
     /**
      * Observable state of this container manager.
@@ -149,7 +146,7 @@ class OpenMowerContainerManager(
         }
     }
 
-    fun start(): Boolean {
+    fun start(imageVersion: String): Boolean {
         synchronized(this) {
             if (containerId != null) {
                 // We already have a container, pull the latest state
@@ -169,7 +166,7 @@ class OpenMowerContainerManager(
             containerId =
                 try {
                     val id =
-                        dockerClient.createContainerCmd("$imageRegistry:latest")
+                        dockerClient.createContainerCmd("$imageRegistry:$imageVersion")
                             .withVolumes(
                                 Volume(
                                     "/home/clemens/mower_config.sh:/config/mower_config.sh",
@@ -259,7 +256,7 @@ class OpenMowerContainerManager(
                                 // This way, the reconnect knows that we're not streaming anymore.
                                 closeable?.close()
                                 closeable = null
-                                synchronized(this@OpenMowerContainerManager) {
+                                synchronized(this@ContainerManager) {
                                     logCallback = null
                                 }
                             }
@@ -275,7 +272,8 @@ class OpenMowerContainerManager(
 
                             override fun onNext(frame: Frame) {
                                 // We have requested timestamps, so parse them.
-                                val split = frame.payload.toString(Charsets.UTF_8).split(' ', ignoreCase = false, limit = 2)
+                                val split =
+                                    frame.payload.toString(Charsets.UTF_8).split(' ', ignoreCase = false, limit = 2)
                                 if (split.size != 2) {
                                     // If not a success, just use "now"
                                     synchronized(logSubject) {

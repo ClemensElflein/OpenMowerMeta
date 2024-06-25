@@ -3,9 +3,11 @@ package de.openmower.backend.endpoints
 import de.openmower.backend.SuccessResponseDTO
 import de.openmower.backend.api.OpenMowerContainerApiService
 import de.openmower.backend.logic.ContainerState
-import de.openmower.backend.logic.OpenMowerContainerManager
+import de.openmower.backend.logic.ContainerManager
 import io.reactivex.rxjava3.disposables.Disposable
 import org.slf4j.LoggerFactory
+import org.springframework.beans.factory.annotation.Qualifier
+import org.springframework.beans.factory.annotation.Value
 import org.springframework.messaging.simp.SimpMessagingTemplate
 import org.springframework.messaging.simp.annotation.SubscribeMapping
 import org.springframework.stereotype.Controller
@@ -18,20 +20,23 @@ import org.springframework.web.socket.WebSocketSession
 import java.util.concurrent.ConcurrentHashMap
 
 @Service
-class OpenMowerContainerApiServiceImpl(private val containerManager: OpenMowerContainerManager) :
-    OpenMowerContainerApiService {
+class OpenMowerContainerApiServiceImpl(
+    @Qualifier("openMowerContainerManager") private val containerManager: ContainerManager
+) : OpenMowerContainerApiService {
+
     override fun executeAction(action: String): SuccessResponseDTO {
         when (action) {
-            "start" -> containerManager.start()
+            "start" -> containerManager.start("latest")
             "stop" -> containerManager.stop()
         }
         return SuccessResponseDTO("OK")
     }
+
 }
 
 @Controller
 class ContainerWebSocketController(
-    private val containerManager: OpenMowerContainerManager,
+    @Qualifier("openMowerContainerManager") private val containerManager: ContainerManager,
     private val template: SimpMessagingTemplate,
 ) {
     private val logger = LoggerFactory.getLogger(this::class.java)
@@ -51,7 +56,7 @@ class ContainerWebSocketController(
 }
 
 @Service
-class OpenMowerContainerLogsClient(private val containerManager: OpenMowerContainerManager) : WebSocketHandler {
+class OpenMowerContainerLogsClient(private val containerManager: ContainerManager) : WebSocketHandler {
     private val logger = LoggerFactory.getLogger(this::class.java)
 
     private val openSockets = ConcurrentHashMap<String, Disposable>()
@@ -60,8 +65,7 @@ class OpenMowerContainerLogsClient(private val containerManager: OpenMowerContai
         session.sendMessage(TextMessage("Websocket Connected ${session.id}"))
         println("Websocket Connected ${session.id}")
         val subscription =
-            containerManager.streamLogs().onErrorComplete().subscribe {
-                    logLine ->
+            containerManager.streamLogs().onErrorComplete().subscribe { logLine ->
                 session.sendMessage(TextMessage(logLine))
             }
         openSockets[session.id] = subscription
