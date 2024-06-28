@@ -6,28 +6,209 @@ info:
 servers:
   - url: http://localhost:8080/v1
 paths:
-  /open-mower-container/action/{action}:
+  '/setting/{id}':
+    get:
+      tags:
+        - Setting
+      summary: Get a setting by ID
+      operationId: getSettingById
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Successful operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Setting'
+    put:
+      tags:
+        - Setting
+      summary: Update a setting by ID
+      operationId: updateSettingById
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Setting'
+      responses:
+        '200':
+          description: Successful operation
     post:
       tags:
-        - OpenMowerContainer
+        - Setting
+      summary: Create a setting by ID
+      operationId: createSettingById
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/Setting'
+      responses:
+        '201':
+          description: Created
+    delete:
+      tags:
+        - Setting
+      summary: Delete a setting by ID
+      operationId: deleteSettingById
+      parameters:
+        - in: path
+          name: id
+          required: true
+          schema:
+            type: string
+      responses:
+        '200':
+          description: Deleted
+  '/setting':
+    get:
+      tags:
+        - Setting
+      summary: Get existing settings
+      operationId: getSettings
+      responses:
+        '200':
+          description: List of existing settings
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/Setting'
+  /container/{id}/status:
+    get:
+      tags:
+        - Container
+      operationId: getState
+      summary: Returns the current ContainerState
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type:
+              string
+      responses:
+        200:
+          description: The current ContainerState
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ContainerState"
+  /container/{id}/action/{action}:
+    post:
+      tags:
+        - Container
       operationId: executeAction
       summary: Start or stop the container
       parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
         - name: action
           in: path
           required: true
           schema:
             type: string
-            enum: [start, stop]
       responses:
         200:
-          description: Successfully executed the requested operation.
+          description: Successfully executed the requested operation. Returns the final ContainerState.
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/SuccessResponse"
+                $ref: "#/components/schemas/ContainerState"
+
+  /container/{id}/image:
+    post:
+      tags:
+        - Container
+      operationId: updateImageById
+      summary: Update the image of a specific container
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ImageDescription'
+      responses:
+        200:
+          description: Image updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ImageDescription'
+    get:
+      tags:
+        - Container
+      operationId: getImageById
+      summary: Retrieve the image of a specific container
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        200:
+          description: Successful operation
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ImageDescription'
+
 components:
   schemas:
+    ImageDescription:
+      type: object
+      properties:
+        image:
+          type: string
+        imageVersion:
+          type: string
+      required:
+        - image
+        - imageVersion
+    Setting:
+      type: object
+      properties:
+        key:
+          type: string
+        value:
+          $ref: '#/components/schemas/AnyValue'
+        description:
+          type: string
+      required:
+        - key
+    AnyValue:
+      type: object
+      additionalProperties: true
     SuccessResponse:
       type: object
       required:
@@ -36,3 +217,37 @@ components:
         message:
           type: string
           nullable: false
+    ExecutionState:
+      type: string
+      enum:
+        - unknown
+        - error
+        - created
+        - exited
+        - starting
+        - restarting
+        - running
+        - dead
+        - paused
+        - stopping
+        - pulling
+
+    ContainerState:
+      type: object
+      properties:
+        executionState:
+          $ref: '#/components/schemas/ExecutionState'
+        runningImage:
+          type: string
+        runningImageVersion:
+          type: string
+        configuredImage:
+          type: string
+        configuredImageVersion:
+          type: string
+      required:
+        - executionState
+        - runningImage
+        - runningImageVersion
+        - configuredImage
+        - configuredImageVersion

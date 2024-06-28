@@ -1,8 +1,9 @@
 package de.openmower.backend.logic
 
 import com.github.dockerjava.api.async.ResultCallback
+import com.github.dockerjava.api.command.CreateContainerCmd
 import com.github.dockerjava.api.model.Frame
-import com.github.dockerjava.api.model.Volume
+import com.github.dockerjava.api.model.PullResponseItem
 import com.github.dockerjava.core.DefaultDockerClientConfig
 import com.github.dockerjava.core.DockerClientImpl
 import com.github.dockerjava.okhttp.OkDockerHttpClient
@@ -14,13 +15,24 @@ import org.slf4j.LoggerFactory
 import org.springframework.scheduling.annotation.Scheduled
 import java.io.Closeable
 import java.time.Instant
+import java.util.concurrent.CountDownLatch
 
+/**
+ * This enum class represents the execution states of a container.
+ *
+ * @property id The id of the state.
+ *
+ * @constructor Creates an ExecutionState with the given id.
+ */
 enum class ExecutionState(val id: String) {
     // Additional state, if we don't know the state (yet)
     UNKNOWN("unknown"),
 
     // Additional state, if there was an error fetching the state
     ERROR("error"),
+
+    // Additional state for when we're pulling the image
+    PULLING("pulling"),
 
     // The "official" docker states
     CREATED("created"),
@@ -38,13 +50,78 @@ enum class ExecutionState(val id: String) {
     }
 }
 
-data class ContainerState(val executionState: ExecutionState, val imageVersion: String)
+/**
+ * This data class represents the state of a container.
+ *
+ * @property executionState The execution state of the container.
+ * @property runningImage The name of the running image.
+ * @property runningImageVersion The version of the running image.
+ * @property configuredImage The name of the configured image.
+ * @property configuredImageVersion The version of the configured image.
+ */
+data class ContainerState(
+    val executionState: ExecutionState,
+    val runningImage: String,
+    val runningImageVersion: String,
+    val configuredImage: String,
+    val configuredImageVersion: String,
+)
 
-class ContainerManager(
+/**
+ * Manages a Docker container.
+ * On startup, the ContainerManager will look for a container with the specified name and track that.
+ * If no such container exists, it will be created on start automatically.
+ *
+ * The ContainerManager keeps track of which image to use for a specified container, is able to pull the image and create
+ * containers from the specified images.
+ *
+ * Subclass ContainerManager in order to add custom functionality (e.g. custom settings).
+ * You can use the `config` member to store the settings. Don't overwrite `image` or `imageVersion` keys though.
+ *
+ *
+ * @property dockerSocketUrl the URL of the Docker socket
+ * @property containerName the name of the managed container
+ * @property defaultImage the default image to use when pulling
+ * @property config the configuration service for retrieving and setting container configurations
+ */
+abstract class ContainerManager(
     private val dockerSocketUrl: String,
     private val containerName: String,
-    private val imageRegistry: String,
+    defaultImage: String,
+    private val config: ConfigurationService.Config,
 ) {
+    private val defaultImage = defaultImage.substringBefore(":")
+    private val defaultImageVersion = defaultImage.substringAfter(":")
+
+    /**
+     * Represents the image to be used by this container.
+     *
+     * @get Retrieves the configuration value for the "image" key. If the value is not found or is of a different type, it returns the default image value.
+     * @set Sets the given value as the configuration value for the "image" key.
+     */
+    var configuredImage: String
+        get() = config.getConfiguration("image") { defaultImage }
+        set(value) =
+            run {
+                config.setConfiguration("image", value)
+            }
+
+    /**
+     * Represents the version of the image used by the container.
+     * The version is retrieved from the configuration using the key "image-version".
+     * If the key is not found or the value is of a different type,
+     * the default value `defaultImageVersion` is used.
+     * Setting a new value for `imageVersion` updates the configuration with the new value.
+     *
+     * Updating this value does not restart the container!
+     */
+    var configuredImageVersion: String
+        get() = config.getConfiguration("image-version") { defaultImageVersion }
+        set(value) =
+            run {
+                config.setConfiguration("image-version", value)
+            }
+
     /**
      * Observable state of this container manager.
      */
@@ -75,20 +152,29 @@ class ContainerManager(
     private var logStreamingEnabled = false
 
     init {
+        // On startup we look for a container with the given name to track it.
         findContainerHandle()
     }
 
+    /**
+     * Set the container state manually, because we have additional states (e.g. PULLING).
+     * Also sometime transitions like STOPPING must be set like this
+     */
     private fun updateContainerStateManual(executionState: ExecutionState) {
         synchronized(stateObservable) {
             stateObservable.onNext(
                 stateObservable.value?.copy(executionState = executionState) ?: ContainerState(
                     executionState,
-                    "unknown",
+                    "none", "none", configuredImage, configuredImageVersion,
                 ),
             )
         }
     }
 
+    /**
+     * This method finds an existing container with the specified name and assigns its ID to containerId,
+     * if found. It also updates the container's state.
+     */
     private fun findContainerHandle() {
         synchronized(this) {
             // Look for an existing container with name `containerName` and assign containerId, if found.
@@ -112,11 +198,17 @@ class ContainerManager(
         }
     }
 
+    /**
+     * Updates the state of the container by querying the dockerClient.
+     *
+     * @return The updated ContainerState object.
+     */
     private fun updateContainerState(): ContainerState {
         synchronized(this) {
             val id = containerId
             if (id == null) {
-                val newState = ContainerState(ExecutionState.EXITED, "unknown")
+                val newState =
+                    ContainerState(ExecutionState.EXITED, "none", "none", configuredImage, configuredImageVersion)
                 synchronized(stateObservable) {
                     stateObservable.onNext(newState)
                 }
@@ -124,12 +216,24 @@ class ContainerManager(
             }
             try {
                 val containerInfo = dockerClient.inspectContainerCmd(id).exec()
-                val imageVersion = containerInfo.config.image
+
+                val (runningImage, runningImageVersion) =
+                    run {
+                        val split = containerInfo.config.image?.split(":")
+                        if (split?.size != 2) {
+                            listOf("unknown", "unknown")
+                        } else {
+                            split
+                        }
+                    }
 
                 val newState =
                     ContainerState(
                         ExecutionState.fromValue(containerInfo.state.status ?: "error"),
-                        imageVersion ?: "unknown",
+                        runningImage,
+                        runningImageVersion,
+                        configuredImage,
+                        configuredImageVersion,
                     )
                 synchronized(stateObservable) {
                     stateObservable.onNext(newState)
@@ -137,7 +241,8 @@ class ContainerManager(
                 return newState
             } catch (e: Exception) {
                 logger.error("Error updating container state", e)
-                val newState = ContainerState(ExecutionState.ERROR, "unknown")
+                val newState =
+                    ContainerState(ExecutionState.ERROR, "none", "none", configuredImage, configuredImageVersion)
                 synchronized(stateObservable) {
                     stateObservable.onNext(newState)
                 }
@@ -146,7 +251,71 @@ class ContainerManager(
         }
     }
 
-    fun start(imageVersion: String): Boolean {
+    /**
+     * Pulls the specified image from the Docker registry.
+     *
+     * @return true if the image is pulled successfully, false otherwise
+     */
+    fun pullImage(): Boolean {
+        if (containerId != null) {
+            stop()
+        }
+        updateContainerStateManual(ExecutionState.PULLING)
+        try {
+            logger.info("pulling $configuredImage:$configuredImageVersion")
+            var success = false
+            val countDownLatch = CountDownLatch(1)
+            dockerClient.pullImageCmd("$configuredImage:$configuredImageVersion")
+                .exec(
+                    object : ResultCallback<PullResponseItem> {
+                        private var closeable: Closeable? = null
+
+                        override fun close() {
+                            closeable?.close()
+                            closeable = null
+                            success = false
+                            countDownLatch.countDown()
+                        }
+
+                        override fun onStart(c: Closeable?) {
+                            closeable = c
+                            logger.info("Started pulling $configuredImage:$configuredImageVersion")
+                        }
+
+                        override fun onError(e: Throwable?) {
+                            logger.error("Error during pulling $configuredImage:$configuredImageVersion", e)
+                            success = false
+                            countDownLatch.countDown()
+                        }
+
+                        override fun onComplete() {
+                            logger.info("completed pulling image $configuredImage:$configuredImageVersion")
+                            success = true
+                            countDownLatch.countDown()
+                        }
+
+                        override fun onNext(p0: PullResponseItem?) {
+                        }
+                    },
+                )
+            countDownLatch.await()
+            updateContainerStateManual(if (success) ExecutionState.EXITED else ExecutionState.ERROR)
+            return success
+        } catch (e: Exception) {
+            logger.error("Error pulling image $configuredImage:$configuredImageVersion", e)
+            updateContainerStateManual(ExecutionState.ERROR)
+            return false
+        }
+    }
+
+    abstract fun configureContainer(builder: CreateContainerCmd)
+
+    /**
+     * Starts the container.
+     *
+     * @return true if the container is started successfully, false otherwise
+     */
+    fun start(): Boolean {
         synchronized(this) {
             if (containerId != null) {
                 // We already have a container, pull the latest state
@@ -160,18 +329,22 @@ class ContainerManager(
                 stop()
             }
 
+            // Check, if we have the image already. If not, pull
+            if (dockerClient.listImagesCmd().withImageNameFilter("$configuredImage:$configuredImageVersion").exec()
+                    .isEmpty()
+            ) {
+                if (!pullImage()) {
+                    return false
+                }
+            }
             updateContainerStateManual(ExecutionState.STARTING)
 
             // Either we stopped the container, or it was already stopped
             containerId =
                 try {
                     val id =
-                        dockerClient.createContainerCmd("$imageRegistry:$imageVersion")
-                            .withVolumes(
-                                Volume(
-                                    "/home/clemens/mower_config.sh:/config/mower_config.sh",
-                                ),
-                            )
+                        dockerClient.createContainerCmd("$configuredImage:$configuredImageVersion")
+                            .also { configureContainer(it) }
                             .withName(containerName).exec()?.id
                     if (id != null) {
                         logger.info("Container created successfully. Starting container.")
@@ -191,6 +364,9 @@ class ContainerManager(
         }
     }
 
+    /**
+     * Stops the container.
+     */
     fun stop() {
         val id = containerId ?: return
         updateContainerStateManual(ExecutionState.STOPPING)
@@ -225,6 +401,9 @@ class ContainerManager(
 
     fun startLogStream() {
         synchronized(this) {
+            // Allow reconnect and tell the timer to connect, even if the container is down.
+            logStreamingEnabled = true
+
             val containerId = containerId ?: return
             if (logCallback != null) {
                 // Stream is active, don't do anything
@@ -307,13 +486,11 @@ class ContainerManager(
                             }
                         },
                     )
-            // Allow reconnect.
-            logStreamingEnabled = true
         }
     }
 
     @Scheduled(fixedRate = 10000)
-    private fun refreshContainerStateAndReconnectLogs() {
+    fun refreshContainerStateAndReconnectLogs() {
         synchronized(this) {
             updateContainerState()
             // Only reconnect, if logging should be enable, the logger is dead and the container is running
