@@ -1,7 +1,10 @@
 package de.openmower.backend.endpoints
 
+import com.fasterxml.jackson.module.kotlin.jacksonObjectMapper
+import com.fasterxml.jackson.module.kotlin.treeToValue
 import de.openmower.backend.ContainerStateDTO
 import de.openmower.backend.ExecutionStateDTO
+import de.openmower.backend.GetAppSettingsById200ResponseDTO
 import de.openmower.backend.ImageDescriptionDTO
 import de.openmower.backend.api.ContainerApiService
 import de.openmower.backend.logic.ContainerManager
@@ -16,6 +19,8 @@ import org.springframework.stereotype.Service
 class ContainerApiServiceImpl(
     @Qualifier("managedContainerMap") private val managedContainers: Map<String, ContainerManager>,
 ) : ContainerApiService {
+    private val mapper = jacksonObjectMapper()
+
     override fun executeAction(
         id: String,
         action: String,
@@ -24,8 +29,24 @@ class ContainerApiServiceImpl(
         when (action) {
             "start" -> manager.start()
             "stop" -> manager.stop()
+            "pull" -> manager.pullImage()
         }
         return manager.stateObservable.blockingFirst().toDto()
+    }
+
+    override fun getAppSettingsById(id: String): GetAppSettingsById200ResponseDTO {
+        val manager = managedContainers[id] ?: throw IllegalArgumentException("No container with id $id in managed container")
+        val settings = mapper.treeToValue<Map<String, Any>>(manager.getAppSettings())
+        val settingsSchema = manager.getAppSettingsJsonSchema()
+        return GetAppSettingsById200ResponseDTO(settings, settingsSchema)
+    }
+
+    override fun getCustomProperty(
+        id: String,
+        key: String,
+    ): String {
+        val manager = managedContainers[id] ?: throw IllegalArgumentException("No container with id $id in managed container")
+        return manager.getCustomProperty(key)
     }
 
     override fun getImageById(id: String): ImageDescriptionDTO {
@@ -36,6 +57,15 @@ class ContainerApiServiceImpl(
     override fun getState(id: String): ContainerStateDTO {
         val manager = managedContainers[id] ?: throw IllegalArgumentException("No container with id $id in managed container")
         return manager.stateObservable.blockingFirst().toDto()
+    }
+
+    override fun saveAppSettingsById(
+        id: String,
+        requestBody: Map<String, Any>,
+    ): Map<String, Any> {
+        val manager = managedContainers[id] ?: throw IllegalArgumentException("No container with id $id in managed container")
+        manager.saveAppSettings(mapper.valueToTree(requestBody))
+        return getAppSettingsById(id).value
     }
 
     override fun updateImageById(

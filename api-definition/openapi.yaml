@@ -138,7 +138,81 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/ContainerState"
-
+  /container/{id}/custom-property/{key}:
+    get:
+      tags:
+        - Container
+      operationId: getCustomProperty
+      summary: Return a custom property for a given container
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: key
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        200:
+          description: The property value
+          content:
+            application/json:
+              schema:
+                type: string
+  /container/{id}/app-settings:
+    post:
+      tags:
+        - Container
+      operationId: saveAppSettingsById
+      summary: Update the app settings for the given container
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AnyValue'
+      responses:
+        200:
+          description: Image updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AnyValue'
+    get:
+      tags:
+        - Container
+      operationId: getAppSettingsById
+      summary: Return the settings for the app hosted by the container with given ID
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        200:
+          description: Image updated successfully
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  value:
+                    $ref: '#/components/schemas/AnyValue'
+                  schema:
+                    type: string
+                required:
+                  - value
+                  - schema
   /container/{id}/image:
     post:
       tags:

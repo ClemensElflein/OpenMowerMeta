@@ -1,5 +1,7 @@
 package de.openmower.backend.logic
 
+import com.fasterxml.jackson.databind.JsonNode
+import com.fasterxml.jackson.databind.node.JsonNodeFactory
 import com.github.dockerjava.api.async.ResultCallback
 import com.github.dockerjava.api.command.CreateContainerCmd
 import com.github.dockerjava.api.model.Frame
@@ -10,7 +12,6 @@ import com.github.dockerjava.okhttp.OkDockerHttpClient
 import io.reactivex.rxjava3.core.Observable
 import io.reactivex.rxjava3.subjects.BehaviorSubject
 import io.reactivex.rxjava3.subjects.ReplaySubject
-import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
 import org.slf4j.LoggerFactory
 import org.springframework.scheduling.annotation.Scheduled
 import java.io.Closeable
@@ -125,8 +126,8 @@ abstract class ContainerManager(
     /**
      * Observable state of this container manager.
      */
-    final val stateObservable: BehaviorSubject<ContainerState> = BehaviorSubject.create()
-    final val logSubject: ReplaySubject<Pair<Instant, String>> = ReplaySubject.createWithSize(500)
+    val stateObservable: BehaviorSubject<ContainerState> = BehaviorSubject.create()
+    val logSubject: ReplaySubject<Pair<Instant, String>> = ReplaySubject.createWithSize(500)
 
     private val logger = LoggerFactory.getLogger(this::class.java)
     private val dockerClientConfig =
@@ -138,12 +139,12 @@ abstract class ContainerManager(
         OkDockerHttpClient.Builder()
             .dockerHost(dockerClientConfig.dockerHost)
             .build()
-    private val dockerClient = DockerClientImpl.getInstance(dockerClientConfig, httpClient)
+    protected val dockerClient = DockerClientImpl.getInstance(dockerClientConfig, httpClient)
 
     /**
      * The ID of the managed container. If this is none, there is no active container.
      */
-    private var containerId: String? = null
+    protected var containerId: String? = null
 
     // Callback for the current log stream from docker.
     private var logCallback: ResultCallback<Frame>? = null
@@ -256,7 +257,7 @@ abstract class ContainerManager(
      *
      * @return true if the image is pulled successfully, false otherwise
      */
-    fun pullImage(): Boolean {
+    open fun pullImage(): Boolean {
         if (containerId != null) {
             stop()
         }
@@ -310,12 +311,46 @@ abstract class ContainerManager(
 
     abstract fun configureContainer(builder: CreateContainerCmd)
 
+    protected fun ensureContainerCreated(): Boolean {
+        synchronized(this) {
+            // Check, if we already have a container. If so, we're done
+            if (containerId != null) {
+                return true
+            }
+            // Check, if we have the image already. If not, pull
+            if (dockerClient.listImagesCmd().withImageNameFilter("$configuredImage:$configuredImageVersion")
+                    .exec()
+                    .isEmpty()
+            ) {
+                if (!pullImage()) {
+                    return false
+                }
+            }
+
+            // Create the container
+            containerId =
+                try {
+                    dockerClient.createContainerCmd("$configuredImage:$configuredImageVersion")
+                        .also { configureContainer(it) }
+                        .withName(containerName).exec()?.id
+                } catch (e: Exception) {
+                    logger.error("Error creating container.", e)
+                    updateContainerStateManual(ExecutionState.ERROR)
+                    null
+                }
+
+            updateContainerState()
+
+            return containerId != null
+        }
+    }
+
     /**
      * Starts the container.
      *
      * @return true if the container is started successfully, false otherwise
      */
-    fun start(): Boolean {
+    open fun start(): Boolean {
         synchronized(this) {
             if (containerId != null) {
                 // We already have a container, pull the latest state
@@ -329,53 +364,47 @@ abstract class ContainerManager(
                 stop()
             }
 
-            // Check, if we have the image already. If not, pull
-            if (dockerClient.listImagesCmd().withImageNameFilter("$configuredImage:$configuredImageVersion").exec()
-                    .isEmpty()
-            ) {
-                if (!pullImage()) {
-                    return false
-                }
+            // Ensure the image is pulled and the container is created.
+            if (!ensureContainerCreated()) {
+                return false
             }
+
             updateContainerStateManual(ExecutionState.STARTING)
 
-            // Either we stopped the container, or it was already stopped
-            containerId =
-                try {
-                    val id =
-                        dockerClient.createContainerCmd("$configuredImage:$configuredImageVersion")
-                            .also { configureContainer(it) }
-                            .withName(containerName).exec()?.id
-                    if (id != null) {
-                        logger.info("Container created successfully. Starting container.")
-                        dockerClient.startContainerCmd(id)
-                            .exec()
-                        logger.info("Container started successfully.")
-                    }
-                    id
-                } catch (e: Exception) {
-                    logger.error("Error starting container.", e)
-                    null
-                }
-
-            updateContainerState()
-
-            return containerId != null
+            // We have a container, start it.
+            return try {
+                logger.info("Starting container.")
+                // !! is safe here, since we're in synchronized(this) and ensureContainerCreated() returned true.
+                dockerClient.startContainerCmd(containerId!!)
+                    .exec()
+                logger.info("Container started successfully.")
+                updateContainerState()
+                true
+            } catch (e: Exception) {
+                logger.error("Error starting container.", e)
+                updateContainerStateManual(ExecutionState.ERROR)
+                false
+            }
         }
     }
 
     /**
      * Stops the container.
      */
-    fun stop() {
+    open fun stop() {
         val id = containerId ?: return
-        updateContainerStateManual(ExecutionState.STOPPING)
         synchronized(this) {
+            // Fetch the current state, since we must not stop a stopped container
+            updateContainerState()
             try {
-                logger.info("Stopping container.")
-                dockerClient.stopContainerCmd(id).exec()
-                logger.info("Waiting for container stop")
-                dockerClient.waitContainerCmd(id).start().awaitCompletion()
+                // Only stop, if actually running. Otherwise just remove.
+                if (stateObservable.value?.executionState == ExecutionState.RUNNING) {
+                    updateContainerStateManual(ExecutionState.STOPPING)
+                    logger.info("Stopping container.")
+                    dockerClient.stopContainerCmd(id).exec()
+                    logger.info("Waiting for container stop")
+                    dockerClient.waitContainerCmd(id).start().awaitCompletion()
+                }
                 logger.info("Removing container")
                 dockerClient.removeContainerCmd(id).withForce(true).exec()
                 containerId = null
@@ -384,19 +413,6 @@ abstract class ContainerManager(
             }
             updateContainerState()
         }
-    }
-
-    fun fetchConfiguration() {
-        val istr =
-            dockerClient.copyArchiveFromContainerCmd(containerId!!, "/opt/open_mower_ros/version_info.env")
-                .withHostPath("/tmp/version_info.env")
-                .exec()
-        val tarStream = TarArchiveInputStream(istr)
-        tarStream.nextEntry
-        val str = tarStream.readAllBytes().toString(Charsets.UTF_8)
-        println(str)
-        tarStream.close()
-        istr.close()
     }
 
     fun startLogStream() {
@@ -513,4 +529,31 @@ abstract class ContainerManager(
         startLogStream()
         return logSubject.map { (_, str) -> str }
     }
+
+    /**
+     * Can be overwritten by specialized containers to show a settings form to the user.
+     */
+    open fun getAppSettingsJsonSchema(): String {
+        return "{}"
+    }
+
+    /**
+     * JSON settings. Should be used by the derived classes to configure the container.
+     */
+    fun saveAppSettings(json: JsonNode) {
+        config.setConfiguration("app-config", json)
+    }
+
+    /**
+     * Read settings, can be used by the derived class to configure the container.
+     * Also this is used to present the current settings to the user.
+     */
+    fun getAppSettings(): JsonNode {
+        return config.getConfiguration("app-config") { JsonNodeFactory.instance.objectNode() }
+    }
+
+    /**
+     * Read custom properties for a given container (e.g. runtime version of the app, if image is a rolling tag)
+     */
+    abstract fun getCustomProperty(key: String): String
 }
