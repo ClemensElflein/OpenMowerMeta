@@ -73,9 +73,10 @@ class OpenMowerContainerManager(
 
                 val tarStream = TarArchiveInputStream(istr)
                 tarStream.nextEntry
-                val str = tarStream.readAllBytes().toString(Charsets.UTF_8)
+                val str = tarStream.readAllBytes().toString(Charsets.UTF_8).substringAfter("OM_SOFTWARE_VERSION=")
                 tarStream.close()
                 istr.close()
+                tmpFile.delete()
                 str
             } catch (e: IOException) {
                 "error"

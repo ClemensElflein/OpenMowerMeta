@@ -35,4 +35,4 @@ repos:
     -   id: vacuum
         files: (^|/)(openapi|swagger).*\.(json|ya?ml)$
 
-exclude: '^(frontend)/(package.json|tsconfig.json|tsconfig.node.json|package-lock.json|openapitools.json)$'
+exclude: '^(frontend)/(tsconfig.app.json|package.json|tsconfig.json|tsconfig.node.json|package-lock.json|openapitools.json)$'
