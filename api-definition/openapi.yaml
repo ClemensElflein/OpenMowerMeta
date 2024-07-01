@@ -6,7 +6,7 @@ info:
 servers:
   - url: http://localhost:8080/v1
 paths:
-  '/setting/{id}':
+  /setting/{id}:
     get:
       tags:
         - Setting
@@ -264,11 +264,11 @@ components:
       properties:
         image:
           type: string
-        imageVersion:
+        imageTag:
           type: string
       required:
         - image
-        - imageVersion
+        - imageTag
     Setting:
       type: object
       properties:
@@ -305,6 +305,7 @@ components:
         - paused
         - stopping
         - pulling
+        - no-container
 
     ContainerState:
       type: object
@@ -313,15 +314,22 @@ components:
           $ref: '#/components/schemas/ExecutionState'
         runningImage:
           type: string
-        runningImageVersion:
+        runningImageTag:
           type: string
         configuredImage:
           type: string
-        configuredImageVersion:
+        configuredImageTag:
           type: string
+        startedAt:
+          type: string
+          format: date-time
+        appProperties:
+          additionalProperties:
+            type: string
       required:
         - executionState
         - runningImage
-        - runningImageVersion
+        - runningImageTag
         - configuredImage
-        - configuredImageVersion
+        - configuredImageTag
+        - appProperties

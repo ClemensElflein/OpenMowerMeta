@@ -16,6 +16,7 @@ import org.slf4j.LoggerFactory
 import org.springframework.scheduling.annotation.Scheduled
 import java.io.Closeable
 import java.time.Instant
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CountDownLatch
 
 /**
@@ -28,6 +29,9 @@ import java.util.concurrent.CountDownLatch
 enum class ExecutionState(val id: String) {
     // Additional state, if we don't know the state (yet)
     UNKNOWN("unknown"),
+
+    // Additional state, for when there is no container.
+    NOCONTAINER("no-container"),
 
     // Additional state, if there was an error fetching the state
     ERROR("error"),
@@ -56,16 +60,18 @@ enum class ExecutionState(val id: String) {
  *
  * @property executionState The execution state of the container.
  * @property runningImage The name of the running image.
- * @property runningImageVersion The version of the running image.
+ * @property runningImageTag The tag of the running image.
  * @property configuredImage The name of the configured image.
- * @property configuredImageVersion The version of the configured image.
+ * @property configuredImageTag The tag of the configured image.
  */
 data class ContainerState(
     val executionState: ExecutionState,
+    val startedAt: String?,
     val runningImage: String,
-    val runningImageVersion: String,
+    val runningImageTag: String,
     val configuredImage: String,
-    val configuredImageVersion: String,
+    val configuredImageTag: String,
+    val appProperties: Map<String, String>,
 )
 
 /**
@@ -77,7 +83,7 @@ data class ContainerState(
  * containers from the specified images.
  *
  * Subclass ContainerManager in order to add custom functionality (e.g. custom settings).
- * You can use the `config` member to store the settings. Don't overwrite `image` or `imageVersion` keys though.
+ * You can use the `config` member to store the settings. Don't overwrite `image` or `imageTag` keys though.
  *
  *
  * @property dockerSocketUrl the URL of the Docker socket
@@ -89,10 +95,11 @@ abstract class ContainerManager(
     private val dockerSocketUrl: String,
     private val containerName: String,
     defaultImage: String,
-    private val config: ConfigurationService.Config,
+    protected val config: ConfigurationService.Config,
 ) {
+    protected val propertyCache = ConcurrentHashMap<String, String>()
     private val defaultImage = defaultImage.substringBefore(":")
-    private val defaultImageVersion = defaultImage.substringAfter(":")
+    private val defaultImageTag = defaultImage.substringAfter(":")
 
     /**
      * Represents the image to be used by this container.
@@ -108,19 +115,19 @@ abstract class ContainerManager(
             }
 
     /**
-     * Represents the version of the image used by the container.
-     * The version is retrieved from the configuration using the key "image-version".
+     * Represents the tag of the image used by the container.
+     * The tag is retrieved from the configuration using the key "image-tag".
      * If the key is not found or the value is of a different type,
-     * the default value `defaultImageVersion` is used.
-     * Setting a new value for `imageVersion` updates the configuration with the new value.
+     * the default value `defaultImageTag` is used.
+     * Setting a new value for `imageTag` updates the configuration with the new value.
      *
      * Updating this value does not restart the container!
      */
-    var configuredImageVersion: String
-        get() = config.getConfiguration("image-version") { defaultImageVersion }
+    var configuredImageTag: String
+        get() = config.getConfiguration("image-tag") { defaultImageTag }
         set(value) =
             run {
-                config.setConfiguration("image-version", value)
+                config.setConfiguration("image-tag", value)
             }
 
     /**
@@ -165,8 +172,8 @@ abstract class ContainerManager(
         synchronized(stateObservable) {
             stateObservable.onNext(
                 stateObservable.value?.copy(executionState = executionState) ?: ContainerState(
-                    executionState,
-                    "none", "none", configuredImage, configuredImageVersion,
+                    executionState, null,
+                    "none", "none", configuredImage, configuredImageTag, getAppProperties(),
                 ),
             )
         }
@@ -192,6 +199,7 @@ abstract class ContainerManager(
             }
             if (containerId != null) {
                 logger.info("Container $containerName found")
+                onContainerCreated()
             } else {
                 logger.info("Did not find container.")
             }
@@ -209,7 +217,15 @@ abstract class ContainerManager(
             val id = containerId
             if (id == null) {
                 val newState =
-                    ContainerState(ExecutionState.EXITED, "none", "none", configuredImage, configuredImageVersion)
+                    ContainerState(
+                        ExecutionState.NOCONTAINER,
+                        null,
+                        "none",
+                        "none",
+                        configuredImage,
+                        configuredImageTag,
+                        getAppProperties(),
+                    )
                 synchronized(stateObservable) {
                     stateObservable.onNext(newState)
                 }
@@ -218,7 +234,7 @@ abstract class ContainerManager(
             try {
                 val containerInfo = dockerClient.inspectContainerCmd(id).exec()
 
-                val (runningImage, runningImageVersion) =
+                val (runningImage, runningImageTag) =
                     run {
                         val split = containerInfo.config.image?.split(":")
                         if (split?.size != 2) {
@@ -228,13 +244,18 @@ abstract class ContainerManager(
                         }
                     }
 
+                val props = mutableMapOf<String, String>()
+                props.putAll(getAppProperties())
+                val executionState = ExecutionState.fromValue(containerInfo.state.status ?: "error")
                 val newState =
                     ContainerState(
-                        ExecutionState.fromValue(containerInfo.state.status ?: "error"),
+                        executionState,
+                        if (executionState == ExecutionState.RUNNING) containerInfo.state.startedAt else null,
                         runningImage,
-                        runningImageVersion,
+                        runningImageTag,
                         configuredImage,
-                        configuredImageVersion,
+                        configuredImageTag,
+                        props,
                     )
                 synchronized(stateObservable) {
                     stateObservable.onNext(newState)
@@ -243,7 +264,7 @@ abstract class ContainerManager(
             } catch (e: Exception) {
                 logger.error("Error updating container state", e)
                 val newState =
-                    ContainerState(ExecutionState.ERROR, "none", "none", configuredImage, configuredImageVersion)
+                    ContainerState(ExecutionState.ERROR, null, "none", "none", configuredImage, configuredImageTag, getAppProperties())
                 synchronized(stateObservable) {
                     stateObservable.onNext(newState)
                 }
@@ -263,10 +284,10 @@ abstract class ContainerManager(
         }
         updateContainerStateManual(ExecutionState.PULLING)
         try {
-            logger.info("pulling $configuredImage:$configuredImageVersion")
+            logger.info("pulling $configuredImage:$configuredImageTag")
             var success = false
             val countDownLatch = CountDownLatch(1)
-            dockerClient.pullImageCmd("$configuredImage:$configuredImageVersion")
+            dockerClient.pullImageCmd("$configuredImage:$configuredImageTag")
                 .exec(
                     object : ResultCallback<PullResponseItem> {
                         private var closeable: Closeable? = null
@@ -280,17 +301,17 @@ abstract class ContainerManager(
 
                         override fun onStart(c: Closeable?) {
                             closeable = c
-                            logger.info("Started pulling $configuredImage:$configuredImageVersion")
+                            logger.info("Started pulling $configuredImage:$configuredImageTag")
                         }
 
                         override fun onError(e: Throwable?) {
-                            logger.error("Error during pulling $configuredImage:$configuredImageVersion", e)
+                            logger.error("Error during pulling $configuredImage:$configuredImageTag", e)
                             success = false
                             countDownLatch.countDown()
                         }
 
                         override fun onComplete() {
-                            logger.info("completed pulling image $configuredImage:$configuredImageVersion")
+                            logger.info("completed pulling image $configuredImage:$configuredImageTag")
                             success = true
                             countDownLatch.countDown()
                         }
@@ -303,7 +324,7 @@ abstract class ContainerManager(
             updateContainerStateManual(if (success) ExecutionState.EXITED else ExecutionState.ERROR)
             return success
         } catch (e: Exception) {
-            logger.error("Error pulling image $configuredImage:$configuredImageVersion", e)
+            logger.error("Error pulling image $configuredImage:$configuredImageTag", e)
             updateContainerStateManual(ExecutionState.ERROR)
             return false
         }
@@ -318,7 +339,7 @@ abstract class ContainerManager(
                 return true
             }
             // Check, if we have the image already. If not, pull
-            if (dockerClient.listImagesCmd().withImageNameFilter("$configuredImage:$configuredImageVersion")
+            if (dockerClient.listImagesCmd().withImageNameFilter("$configuredImage:$configuredImageTag")
                     .exec()
                     .isEmpty()
             ) {
@@ -330,7 +351,7 @@ abstract class ContainerManager(
             // Create the container
             containerId =
                 try {
-                    dockerClient.createContainerCmd("$configuredImage:$configuredImageVersion")
+                    dockerClient.createContainerCmd("$configuredImage:$configuredImageTag")
                         .also { configureContainer(it) }
                         .withName(containerName).exec()?.id
                 } catch (e: Exception) {
@@ -338,6 +359,10 @@ abstract class ContainerManager(
                     updateContainerStateManual(ExecutionState.ERROR)
                     null
                 }
+
+            if (containerId != null) {
+                onContainerCreated()
+            }
 
             updateContainerState()
 
@@ -408,6 +433,7 @@ abstract class ContainerManager(
                 logger.info("Removing container")
                 dockerClient.removeContainerCmd(id).withForce(true).exec()
                 containerId = null
+                onContainerDestroyed()
             } catch (e: Exception) {
                 logger.error("Error stopping container.", e)
             }
@@ -540,7 +566,7 @@ abstract class ContainerManager(
     /**
      * JSON settings. Should be used by the derived classes to configure the container.
      */
-    fun saveAppSettings(json: JsonNode) {
+    open fun saveAppSettings(json: JsonNode) {
         config.setConfiguration("app-config", json)
     }
 
@@ -553,7 +579,22 @@ abstract class ContainerManager(
     }
 
     /**
-     * Read custom properties for a given container (e.g. runtime version of the app, if image is a rolling tag)
+     * Read custom properties for a given container (e.g. runtime version of the app, if image uses a rolling tag)
      */
     abstract fun getCustomProperty(key: String): String
+
+    /**
+     * Get all custom properties for a given container. If expensive to get, this should return a cached value.
+     */
+    abstract fun getAppProperties(): Map<String, String>
+
+    /**
+     * Callback for subclasses, whenever the container was created. This can be used to load app properties (like version or settings)
+     */
+    protected open fun onContainerCreated() {}
+
+    /**
+     * Callback for subclasses whenever the container was removed. This can be used to invalidate app property caches
+     */
+    protected open fun onContainerDestroyed() {}
 }

@@ -24,6 +24,10 @@ class OpenMowerMetaContainerManager(
         return "unknown property"
     }
 
+    override fun getAppProperties(): Map<String, String> {
+        return emptyMap()
+    }
+
     override fun pullImage(): Boolean {
         val success = super.pullImage()
         if (success) {

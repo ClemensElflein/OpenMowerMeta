@@ -49,7 +49,7 @@ export const Primary: Story = {
         currentIndex={currentIndex}
         onSelect={(index) => setCurrentIndex(index)}
         drawerItems={items}
-        children={<div>Yo</div>}
+        children={<div>Content</div>}
       />
     );
   },

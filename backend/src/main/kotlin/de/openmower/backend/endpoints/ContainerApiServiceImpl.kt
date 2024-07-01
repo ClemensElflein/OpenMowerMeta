@@ -10,10 +10,12 @@ import de.openmower.backend.api.ContainerApiService
 import de.openmower.backend.logic.ContainerManager
 import de.openmower.backend.logic.ContainerState
 import org.springframework.beans.factory.annotation.Qualifier
+import org.springframework.messaging.handler.annotation.DestinationVariable
 import org.springframework.messaging.simp.SimpMessagingTemplate
 import org.springframework.messaging.simp.annotation.SubscribeMapping
 import org.springframework.stereotype.Controller
 import org.springframework.stereotype.Service
+import java.time.OffsetDateTime
 
 @Service
 class ContainerApiServiceImpl(
@@ -51,7 +53,7 @@ class ContainerApiServiceImpl(
 
     override fun getImageById(id: String): ImageDescriptionDTO {
         val manager = managedContainers[id] ?: throw IllegalArgumentException("No container with id $id in managed container")
-        return ImageDescriptionDTO(manager.configuredImage, manager.configuredImageVersion)
+        return ImageDescriptionDTO(manager.configuredImage, manager.configuredImageTag)
     }
 
     override fun getState(id: String): ContainerStateDTO {
@@ -74,7 +76,7 @@ class ContainerApiServiceImpl(
     ): ImageDescriptionDTO {
         val manager = managedContainers[id] ?: throw IllegalArgumentException("No container with id $id in managed container")
         manager.configuredImage = imageDescriptionDTO.image
-        manager.configuredImageVersion = imageDescriptionDTO.imageVersion
+        manager.configuredImageTag = imageDescriptionDTO.imageTag
         return getImageById(id)
     }
 }
@@ -82,11 +84,13 @@ class ContainerApiServiceImpl(
 private fun ContainerState.toDto() =
     this.let {
         ContainerStateDTO(
-            executionState = ExecutionStateDTO.valueOf(it.executionState.id),
+            executionState = ExecutionStateDTO.entries.firstOrNull { v -> v.value == it.executionState.id } ?: ExecutionStateDTO.error,
             runningImage = it.runningImage,
-            runningImageVersion = it.runningImageVersion,
+            runningImageTag = it.runningImageTag,
             configuredImage = it.configuredImage,
-            configuredImageVersion = it.configuredImageVersion,
+            configuredImageTag = it.configuredImageTag,
+            startedAt = it.startedAt?.let { t -> OffsetDateTime.parse(t) },
+            appProperties = it.appProperties,
         )
     }
 
@@ -99,13 +103,15 @@ class ContainerWebSocketController(
         // Subscribe to state changes and publish to WebSocket
         managedContainers.forEach { id, manager ->
             manager.stateObservable.subscribe { state ->
-                template.convertAndSend("/topic/$id/state", state)
+                template.convertAndSend("/topic/container/$id/state", state.toDto())
             }
         }
     }
 
-    @SubscribeMapping("/{id}/state")
-    fun onContainerStateSubscribe(id: String): ContainerStateDTO? {
+    @SubscribeMapping("/container/{id}/state")
+    fun onContainerStateSubscribe(
+        @DestinationVariable id: String,
+    ): ContainerStateDTO? {
         println("websocket connected to $id")
         val manager = managedContainers[id] ?: throw IllegalArgumentException("No container with id $id in managed container")
         return manager.stateObservable.value?.toDto()
