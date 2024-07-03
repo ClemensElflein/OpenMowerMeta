@@ -89,9 +89,30 @@
 
 		<!-- JSON schema -->
 		<dependency>
+			<groupId>com.github.victools</groupId>
+			<artifactId>jsonschema-generator</artifactId>
+			<version>4.35.0</version>
+		</dependency>
+		<dependency>
+			<groupId>com.github.victools</groupId>
+			<artifactId>jsonschema-module-swagger-2</artifactId>
+			<version>4.35.0</version>
+		</dependency>
+		<dependency>
+			<groupId>com.fasterxml</groupId>
+			<artifactId>classmate</artifactId>
+		</dependency>
+
+		<dependency>
 			<groupId>com.github.jimblackler.jsonschemafriend</groupId>
 			<artifactId>core</artifactId>
 			<version>0.12.4</version>
+		</dependency>
+
+		<dependency>
+			<groupId>org.openapitools</groupId>
+			<artifactId>jackson-databind-nullable</artifactId>
+			<version>0.2.6</version>
 		</dependency>
 	</dependencies>
 
@@ -155,6 +176,7 @@
 				<!-- /RELEASE_VERSION -->
 				<executions>
 					<execution>
+						<id>generate-server</id>
 						<goals>
 							<goal>generate</goal>
 						</goals>
@@ -174,6 +196,25 @@
 							</configOptions>
 						</configuration>
 					</execution>
+					<execution>
+						<id>generate-api-client</id>
+						<goals>
+							<goal>generate</goal>
+						</goals>
+						<configuration>
+							<inputSpec>${project.basedir}/src/main/resources/api.openmower.de.openapi.yaml</inputSpec>
+							<generatorName>java</generatorName>
+							<modelNameSuffix>DTO</modelNameSuffix>
+							<generateApiTests>false</generateApiTests>
+							<generateModelTests>false</generateModelTests>
+							<configOptions>
+								<modelPackage>de.openmower.apiclient</modelPackage>
+								<apiPackage>de.openmower.apiclient.api</apiPackage>
+								<library>restclient</library>
+								<useJakartaEe>true</useJakartaEe>
+							</configOptions>
+						</configuration>
+					</execution>
 				</executions>
 			</plugin>
 			<plugin>
@@ -190,6 +231,7 @@
 						<configuration>
 							<sources>
 								<source>${project.basedir}/target/generated-sources/openapi/src/main/kotlin</source>
+								<source>${project.basedir}/target/generated-sources/openapi/src/main/java</source>
 							</sources>
 						</configuration>
 					</execution>

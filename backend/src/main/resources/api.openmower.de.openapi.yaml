@@ -1,0 +1,94 @@
+openapi: "3.0.0"
+info:
+  version: 1.0.0
+  title: Open Mower Api
+  license:
+    name: MIT
+  description: Basic REST API functions
+servers:
+  - url: https://api.openmower.de/v1
+paths:
+  /version:
+    post:
+      summary: Get Update Information
+      operationId: getUpdateInfo
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/VersionInfoRequest"
+      tags:
+        - OpenMower
+      responses:
+        '200':
+          description: Version
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/VersionInfoResponse"
+        default:
+          description: Unexpected error
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Error"
+components:
+  schemas:
+    VersionInfoRequest:
+      type: object
+      properties:
+        id:
+          type: string
+        current-image:
+          type: string
+        current-version-hashes:
+          description: List of docker image digests to check
+          type: array
+          nullable: false
+          items:
+            type: string
+            nullable: false
+      required:
+        - id
+        - current-image
+        - current-version-hashes
+    VersionInfoResponse:
+      type: object
+      required:
+        - latest-version
+      properties:
+        tag-update-available:
+          type: boolean
+          description: True, if an update is available using the current tag.
+        update-available:
+          type: boolean
+          description: True, if there is an update available in other tags.
+        tags:
+          type: array
+          items:
+            type: object
+            properties:
+              tag:
+                description: The Docker tag to set to use this version
+                type: string
+              app-version:
+                description: The app version contained in this tag
+                type: string
+          nullable: false
+    Error:
+      type: object
+      required:
+        - code
+        - message
+      properties:
+        error-props:
+          type: array
+          items:
+            type: string
+            nullable: false
+        code:
+          type: integer
+          format: int32
+        message:
+          type: string

@@ -9,6 +9,8 @@ import com.github.dockerjava.api.model.PullResponseItem
 import com.github.dockerjava.core.DefaultDockerClientConfig
 import com.github.dockerjava.core.DockerClientImpl
 import com.github.dockerjava.okhttp.OkDockerHttpClient
+import de.openmower.apiclient.VersionInfoRequestDTO
+import de.openmower.apiclient.api.OpenMowerApi
 import io.reactivex.rxjava3.core.Observable
 import io.reactivex.rxjava3.subjects.BehaviorSubject
 import io.reactivex.rxjava3.subjects.ReplaySubject
@@ -100,6 +102,11 @@ abstract class ContainerManager(
     protected val propertyCache = ConcurrentHashMap<String, String>()
     private val defaultImage = defaultImage.substringBefore(":")
     private val defaultImageTag = defaultImage.substringAfter(":")
+
+    /**
+     * OpenMower API instance
+     */
+    val api = OpenMowerApi()
 
     /**
      * Represents the image to be used by this container.
@@ -264,12 +271,49 @@ abstract class ContainerManager(
             } catch (e: Exception) {
                 logger.error("Error updating container state", e)
                 val newState =
-                    ContainerState(ExecutionState.ERROR, null, "none", "none", configuredImage, configuredImageTag, getAppProperties())
+                    ContainerState(
+                        ExecutionState.ERROR,
+                        null,
+                        "none",
+                        "none",
+                        configuredImage,
+                        configuredImageTag,
+                        getAppProperties(),
+                    )
                 synchronized(stateObservable) {
                     stateObservable.onNext(newState)
                 }
                 return newState
             }
+        }
+    }
+
+    fun checkForUpdate() {
+        try {
+            val imageInfoResponse =
+                dockerClient
+                    .listImagesCmd()
+                    .withImageNameFilter("$configuredImage:$configuredImageTag")
+                    .exec()
+            if (imageInfoResponse.isEmpty()) {
+                // We don't have an image for this, we cannot check for updates.
+                return
+            }
+            val info = imageInfoResponse.first()
+            val updateResponse =
+                api.getUpdateInfo(
+                    VersionInfoRequestDTO().also {
+                        it.id = "some test ID"
+                        it.currentImage = "$configuredImage:$configuredImageTag"
+                        it.currentVersionHashes =
+                            info.repoDigests?.map { digest -> digest?.substringAfter("@") } ?: emptyList()
+                    },
+                )
+
+            println(updateResponse)
+            config.setConfiguration("update-available", updateResponse.tagUpdateAvailable)
+        } catch (_: Exception) {
+            logger.error("Error during update check.")
         }
     }
 
@@ -282,6 +326,10 @@ abstract class ContainerManager(
         if (containerId != null) {
             stop()
         }
+
+        // Clear update state, since we are pulling the update.
+        config.setConfiguration("update-available", false)
+
         updateContainerStateManual(ExecutionState.PULLING)
         try {
             logger.info("pulling $configuredImage:$configuredImageTag")
